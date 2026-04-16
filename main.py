@@ -3,7 +3,6 @@ import psycopg2
 import random
 import pandas as pd
 from config import DB_CONFIG
-from datetime import datetime
 
 # Настройка страницы
 st.set_page_config(
@@ -14,8 +13,6 @@ st.set_page_config(
 # Инициализация состояния сессии
 if 'user_id' not in st.session_state:
     st.session_state.user_id = None
-if 'current_word' not in st.session_state:
-    st.session_state.current_word = None
 if 'current_word_id' not in st.session_state:
     st.session_state.current_word_id = None
 if 'current_word_type' not in st.session_state:
@@ -28,6 +25,8 @@ if 'answer_submitted' not in st.session_state:
     st.session_state.answer_submitted = False
 if 'last_answer_correct' not in st.session_state:
     st.session_state.last_answer_correct = None
+if 'options' not in st.session_state:
+    st.session_state.options = []
 if 'login_form' not in st.session_state:
     st.session_state.login_form = 'login'
 
@@ -41,7 +40,6 @@ def init_database():
     conn = get_db_connection()
     cur = conn.cursor()
 
-    # Таблица пользователей
     cur.execute("""
         CREATE TABLE IF NOT EXISTS users (
             id SERIAL PRIMARY KEY,
@@ -51,7 +49,6 @@ def init_database():
         )
     """)
 
-    # Таблица общих слов
     cur.execute("""
         CREATE TABLE IF NOT EXISTS common_words (
             id SERIAL PRIMARY KEY,
@@ -61,7 +58,6 @@ def init_database():
         )
     """)
 
-    # Таблица пользовательских слов
     cur.execute("""
         CREATE TABLE IF NOT EXISTS user_words (
             id SERIAL PRIMARY KEY,
@@ -72,7 +68,6 @@ def init_database():
         )
     """)
 
-    # Таблица статистики обучения
     cur.execute("""
         CREATE TABLE IF NOT EXISTS learning_stats (
             id SERIAL PRIMARY KEY,
@@ -85,22 +80,58 @@ def init_database():
         )
     """)
 
-    # Проверяем, есть ли общие слова
     cur.execute("SELECT COUNT(*) FROM common_words")
     count = cur.fetchone()[0]
 
     if count == 0:
         initial_words = [
+            # Цвета (10)
             ('красный', 'red'),
             ('синий', 'blue'),
             ('зелёный', 'green'),
             ('жёлтый', 'yellow'),
             ('чёрный', 'black'),
             ('белый', 'white'),
+            ('оранжевый', 'orange'),
+            ('фиолетовый', 'purple'),
+            ('розовый', 'pink'),
+            ('коричневый', 'brown'),
+            
+            # Животные (10)
             ('кот', 'cat'),
             ('собака', 'dog'),
+            ('мышь', 'mouse'),
+            ('птица', 'bird'),
+            ('рыба', 'fish'),
+            ('лошадь', 'horse'),
+            ('корова', 'cow'),
+            ('свинья', 'pig'),
+            ('медведь', 'bear'),
+            ('волк', 'wolf'),
+            
+            # Природа (10)
             ('солнце', 'sun'),
-            ('луна', 'moon')
+            ('луна', 'moon'),
+            ('звезда', 'star'),
+            ('небо', 'sky'),
+            ('облако', 'cloud'),
+            ('дождь', 'rain'),
+            ('снег', 'snow'),
+            ('ветер', 'wind'),
+            ('дерево', 'tree'),
+            ('цветок', 'flower'),
+            
+            # Предметы и еда (10)
+            ('машина', 'car'),
+            ('дом', 'house'),
+            ('вода', 'water'),
+            ('огонь', 'fire'),
+            ('хлеб', 'bread'),
+            ('молоко', 'milk'),
+            ('яблоко', 'apple'),
+            ('стул', 'chair'),
+            ('стол', 'table'),
+            ('книга', 'book')
         ]
 
         for rus, eng in initial_words:
@@ -108,7 +139,6 @@ def init_database():
                 INSERT INTO common_words (russian_word, english_word)
                 VALUES (%s, %s)
             """, (rus, eng))
-
     conn.commit()
     cur.close()
     conn.close()
@@ -236,7 +266,7 @@ def add_user_word(user_id, russian_word, english_word):
         INSERT INTO user_words (user_id, russian_word, english_word)
         VALUES (%s, %s, %s)
         RETURNING id
-    """, (user_id, russian_word.lower(), english_word.lower()))
+    """, (user_id, russian_word, english_word))
 
     word_id = cur.fetchone()[0]
     conn.commit()
@@ -379,7 +409,7 @@ init_database()
 def show_login_form():
     st.header("Вход в систему")
 
-    with st.form("login_form"):
+    with st.form("login"):
         username = st.text_input("Логин")
         password = st.text_input("Пароль", type="password")
         submitted = st.form_submit_button("Войти")
@@ -405,7 +435,7 @@ def show_login_form():
 def show_register_form():
     st.header("Регистрация")
 
-    with st.form("register_form"):
+    with st.form("register"):
         username = st.text_input("Логин")
         password = st.text_input("Пароль", type="password")
         confirm_password = st.text_input("Подтвердите пароль", type="password")
@@ -438,9 +468,8 @@ def main_app():
     st.title("EnglishCard - Изучение английского языка")
     st.markdown("---")
 
-    # Боковая панель с навигацией
     st.sidebar.title("Меню")
-    st.sidebar.write(f"Пользователь: {st.session_state.user_id}")
+    st.sidebar.write(f"Вы вошли как пользователь ID: {st.session_state.user_id}")
 
     if st.sidebar.button("Выйти"):
         st.session_state.user_id = None
@@ -482,14 +511,15 @@ def main_app():
     elif page == "Изучение":
         st.header("Изучение слов")
 
+        # Кнопка нового слова
         col1, col2 = st.columns([3, 1])
-
         with col2:
             if st.button("Новое слово", use_container_width=True):
                 st.session_state.current_word_id = None
                 st.session_state.answer_submitted = False
                 st.rerun()
 
+        # Загружаем новое слово, если нужно
         if st.session_state.current_word_id is None:
             word = get_random_word_for_quiz(st.session_state.user_id)
             if word:
@@ -497,44 +527,62 @@ def main_app():
                 st.session_state.current_russian = word[1]
                 st.session_state.current_english = word[2]
                 st.session_state.current_word_type = word[3]
+                st.session_state.answer_submitted = False
+                # Генерируем варианты ответов
+                options = get_random_options(
+                    st.session_state.user_id,
+                    st.session_state.current_word_id,
+                    st.session_state.current_word_type,
+                    st.session_state.current_english
+                )
+                options.append(st.session_state.current_english)
+                random.shuffle(options)
+                st.session_state.options = options
             else:
                 st.warning("В вашем словаре нет слов. Добавьте новые слова.")
                 st.stop()
 
+        # Отображаем вопрос
         with col1:
             st.markdown(f"## Как переводится слово:")
             st.markdown(f"## {st.session_state.current_russian}")
 
         st.markdown("---")
 
-        options = get_random_options(
-            st.session_state.user_id,
-            st.session_state.current_word_id,
-            st.session_state.current_word_type,
-            st.session_state.current_english
-        )
-        options.append(st.session_state.current_english)
-        random.shuffle(options)
+        correct_answer = st.session_state.current_english
+        options = st.session_state.options
 
+        # Отображаем кнопки с вариантами
         cols = st.columns(2)
         for i, option in enumerate(options):
             col = cols[i % 2]
-            if col.button(option, key=f"btn_{i}", use_container_width=True):
-                is_correct = (option == st.session_state.current_english)
-                update_statistics(
-                    st.session_state.user_id,
-                    st.session_state.current_word_id,
-                    st.session_state.current_word_type,
-                    is_correct
-                )
+            # Если ответ уже дан, делаем кнопки неактивными
+            disabled = st.session_state.answer_submitted
+            if col.button(option, key=f"quiz_btn_{i}", use_container_width=True, disabled=disabled):
+                if option == correct_answer:
+                    st.session_state.last_answer_correct = True
+                    update_statistics(
+                        st.session_state.user_id,
+                        st.session_state.current_word_id,
+                        st.session_state.current_word_type,
+                        True
+                    )
+                else:
+                    st.session_state.last_answer_correct = False
+                    update_statistics(
+                        st.session_state.user_id,
+                        st.session_state.current_word_id,
+                        st.session_state.current_word_type,
+                        False
+                    )
                 st.session_state.answer_submitted = True
-                st.session_state.last_answer_correct = is_correct
 
+        # Показываем результат после ответа
         if st.session_state.answer_submitted:
             if st.session_state.last_answer_correct:
-                st.success(f"Правильно. {st.session_state.current_english} - верный перевод.")
+                st.success(f"Правильно. {correct_answer} - верный перевод.")
             else:
-                st.error(f"Неправильно. Правильный ответ: {st.session_state.current_english}")
+                st.error(f"Неправильно. Правильный ответ: {correct_answer}")
 
             if st.button("Следующее слово"):
                 st.session_state.current_word_id = None
@@ -580,8 +628,7 @@ def main_app():
 
         if words:
             word_dict = {f"{w[2]} - {w[1]}": w[0] for w in words}
-            selected_word = st.selectbox("Выберите слово для удаления", list(word_dict.keys()))
-
+            selected_word = st.selectbox("Выберите слово для удаления", list(word_dict.keys()), key="delete_select")
             if st.button("Удалить", use_container_width=True):
                 word_id = word_dict[selected_word]
                 delete_user_word(st.session_state.user_id, word_id)
