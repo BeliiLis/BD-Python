@@ -13,6 +13,8 @@ st.set_page_config(
 # Инициализация состояния сессии
 if 'user_id' not in st.session_state:
     st.session_state.user_id = None
+if 'current_word' not in st.session_state:
+    st.session_state.current_word = None
 if 'current_word_id' not in st.session_state:
     st.session_state.current_word_id = None
 if 'current_word_type' not in st.session_state:
@@ -21,12 +23,12 @@ if 'current_english' not in st.session_state:
     st.session_state.current_english = None
 if 'current_russian' not in st.session_state:
     st.session_state.current_russian = None
+if 'options' not in st.session_state:
+    st.session_state.options = []
 if 'answer_submitted' not in st.session_state:
     st.session_state.answer_submitted = False
 if 'last_answer_correct' not in st.session_state:
     st.session_state.last_answer_correct = None
-if 'options' not in st.session_state:
-    st.session_state.options = []
 if 'login_form' not in st.session_state:
     st.session_state.login_form = 'login'
 
@@ -85,7 +87,6 @@ def init_database():
 
     if count == 0:
         initial_words = [
-            # Цвета (10)
             ('красный', 'red'),
             ('синий', 'blue'),
             ('зелёный', 'green'),
@@ -96,8 +97,6 @@ def init_database():
             ('фиолетовый', 'purple'),
             ('розовый', 'pink'),
             ('коричневый', 'brown'),
-            
-            # Животные (10)
             ('кот', 'cat'),
             ('собака', 'dog'),
             ('мышь', 'mouse'),
@@ -108,8 +107,6 @@ def init_database():
             ('свинья', 'pig'),
             ('медведь', 'bear'),
             ('волк', 'wolf'),
-            
-            # Природа (10)
             ('солнце', 'sun'),
             ('луна', 'moon'),
             ('звезда', 'star'),
@@ -120,8 +117,6 @@ def init_database():
             ('ветер', 'wind'),
             ('дерево', 'tree'),
             ('цветок', 'flower'),
-            
-            # Предметы и еда (10)
             ('машина', 'car'),
             ('дом', 'house'),
             ('вода', 'water'),
@@ -139,6 +134,7 @@ def init_database():
                 INSERT INTO common_words (russian_word, english_word)
                 VALUES (%s, %s)
             """, (rus, eng))
+
     conn.commit()
     cur.close()
     conn.close()
@@ -201,7 +197,11 @@ def get_user_words_count(user_id):
     return count
 
 
-def get_random_word_for_quiz(user_id):
+def get_quiz_words(user_id):
+    """
+    Возвращает 4 случайных слова (общие + персональные) за один запрос.
+    Первое слово используется как основное, остальные как варианты ответа.
+    """
     conn = get_db_connection()
     cur = conn.cursor()
 
@@ -215,47 +215,13 @@ def get_random_word_for_quiz(user_id):
             WHERE user_id = %s
         ) AS all_words
         ORDER BY RANDOM()
-        LIMIT 1
+        LIMIT 4
     """, (user_id,))
 
-    result = cur.fetchone()
+    result = cur.fetchall()
     cur.close()
     conn.close()
     return result
-
-
-def get_random_options(user_id, current_word_id, current_word_type, current_english):
-    conn = get_db_connection()
-    cur = conn.cursor()
-
-    if current_word_type == 'common':
-        cur.execute("""
-            SELECT english_word FROM common_words
-            WHERE id != %s
-            ORDER BY RANDOM()
-            LIMIT 3
-        """, (current_word_id,))
-    else:
-        cur.execute("""
-            SELECT english_word FROM user_words
-            WHERE user_id = %s AND id != %s
-            ORDER BY RANDOM()
-            LIMIT 3
-        """, (user_id, current_word_id))
-
-    options = [row[0] for row in cur.fetchall()]
-
-    if len(options) < 3:
-        cur.execute("SELECT english_word FROM common_words ORDER BY RANDOM() LIMIT 3")
-        for row in cur.fetchall():
-            if row[0] != current_english and row[0] not in options:
-                options.append(row[0])
-            if len(options) == 3:
-                break
-
-    cur.close()
-    conn.close()
-    return options[:3]
 
 
 def add_user_word(user_id, russian_word, english_word):
@@ -515,31 +481,27 @@ def main_app():
         col1, col2 = st.columns([3, 1])
         with col2:
             if st.button("Новое слово", use_container_width=True):
-                st.session_state.current_word_id = None
+                st.session_state.current_word = None
                 st.session_state.answer_submitted = False
                 st.rerun()
 
-        # Загружаем новое слово, если нужно
-        if st.session_state.current_word_id is None:
-            word = get_random_word_for_quiz(st.session_state.user_id)
-            if word:
-                st.session_state.current_word_id = word[0]
-                st.session_state.current_russian = word[1]
-                st.session_state.current_english = word[2]
-                st.session_state.current_word_type = word[3]
-                st.session_state.answer_submitted = False
-                # Генерируем варианты ответов
-                options = get_random_options(
-                    st.session_state.user_id,
-                    st.session_state.current_word_id,
-                    st.session_state.current_word_type,
-                    st.session_state.current_english
-                )
-                options.append(st.session_state.current_english)
+        # Загружаем 4 слова за один запрос
+        if st.session_state.current_word is None:
+            words = get_quiz_words(st.session_state.user_id)
+            if words and len(words) >= 4:
+                # Сохраняем все 4 слова
+                st.session_state.current_word = words
+                # Первое слово используем как основное
+                st.session_state.current_word_id = words[0][0]
+                st.session_state.current_russian = words[0][1]
+                st.session_state.current_english = words[0][2]
+                st.session_state.current_word_type = words[0][3]
+                # Варианты ответа - все 4 слова, перемешиваем
+                options = [w[2] for w in words]
                 random.shuffle(options)
                 st.session_state.options = options
             else:
-                st.warning("В вашем словаре нет слов. Добавьте новые слова.")
+                st.warning("В вашем словаре недостаточно слов. Добавьте новые слова.")
                 st.stop()
 
         # Отображаем вопрос
@@ -551,30 +513,24 @@ def main_app():
 
         correct_answer = st.session_state.current_english
         options = st.session_state.options
+        disabled = st.session_state.answer_submitted
 
         # Отображаем кнопки с вариантами
         cols = st.columns(2)
         for i, option in enumerate(options):
             col = cols[i % 2]
-            # Если ответ уже дан, делаем кнопки неактивными
-            disabled = st.session_state.answer_submitted
             if col.button(option, key=f"quiz_btn_{i}", use_container_width=True, disabled=disabled):
-                if option == correct_answer:
-                    st.session_state.last_answer_correct = True
-                    update_statistics(
-                        st.session_state.user_id,
-                        st.session_state.current_word_id,
-                        st.session_state.current_word_type,
-                        True
-                    )
-                else:
-                    st.session_state.last_answer_correct = False
-                    update_statistics(
-                        st.session_state.user_id,
-                        st.session_state.current_word_id,
-                        st.session_state.current_word_type,
-                        False
-                    )
+                # Определяем правильность ответа
+                is_correct = (option == correct_answer)
+                
+                # Обновляем состояние и статистику без дублирования
+                st.session_state.last_answer_correct = is_correct
+                update_statistics(
+                    st.session_state.user_id,
+                    st.session_state.current_word_id,
+                    st.session_state.current_word_type,
+                    is_correct
+                )
                 st.session_state.answer_submitted = True
 
         # Показываем результат после ответа
@@ -585,7 +541,7 @@ def main_app():
                 st.error(f"Неправильно. Правильный ответ: {correct_answer}")
 
             if st.button("Следующее слово"):
-                st.session_state.current_word_id = None
+                st.session_state.current_word = None
                 st.session_state.answer_submitted = False
                 st.rerun()
 
